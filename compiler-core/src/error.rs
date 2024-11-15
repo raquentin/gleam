@@ -16,7 +16,7 @@ use itertools::Itertools;
 use pubgrub::package::Package;
 use pubgrub::report::DerivationTree;
 use pubgrub::version::Version;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fmt::{Debug, Display};
 use std::io::Write;
@@ -223,6 +223,12 @@ file_names.iter().map(|x| x.as_str()).join(", "))]
 
     #[error("Dependency tree resolution failed: {0}")]
     DependencyResolutionFailed(String),
+
+    #[error("Dependency tree resolution failed: {error}")]
+    DependencyResolutionFailedWithLocked {
+        locked_pkgs: Vec<EcoString>, // pkg name -> version string
+        error: String,
+    },
 
     #[error("The package {0} is listed in dependencies and dev-dependencies")]
     DuplicateDependency(EcoString),

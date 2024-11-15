@@ -28,8 +28,24 @@ where
 {
     tracing::info!("resolving_versions");
     let root_version = Version::new(0, 0, 0);
-    let requirements =
-        root_dependencies(dependencies, locked).map_err(Error::dependency_resolution_failed)?;
+
+    let requirements = match root_dependencies(dependencies, locked) {
+        Ok(reqs) => reqs,
+        Err(err) => {
+            if is_ci_environment() {
+                return Err(Error::dependency_resolution_failed(err));
+            }
+
+            if let Some(locked_pkgs) = find_locked_packages_in_error(locked, &err) {
+                return Err(Error::DependencyResolutionFailedWithLocked {
+                    locked_pkgs,
+                    error: err.to_string(),
+                });
+            } else {
+                return Err(Error::dependency_resolution_failed(err));
+            }
+        }
+    };
 
     // Creating a map of all the required packages that have exact versions specified
     let exact_deps = &requirements
@@ -61,6 +77,52 @@ where
     .collect();
 
     Ok(packages)
+}
+
+// Looks for common CI environment vars to bypass CLI suggestion to
+// unlock locked pkgs when they are part of a version conflict.
+fn is_ci_environment() -> bool {
+    const CI_ENV_VARS: &[&str] = &["CIRCLECI"];
+
+    CI_ENV_VARS.iter().any(|var| std::env::var(var).is_ok())
+}
+
+fn find_locked_packages_in_error(
+    locked: &HashMap<EcoString, Version>,
+    err: &ResolutionError,
+) -> Option<Vec<EcoString>> {
+    use pubgrub::{
+        error::PubGrubError,
+        report::{DerivationTree, External},
+    };
+
+    match err {
+        PubGrubError::NoSolution(tree) => {
+            if let DerivationTree::External(External::FromDependencyOf(p1, _v1, p2, _v2)) = tree {
+                // Collect any packages that are in the locked map
+                let conflicting: Vec<EcoString> = [p1, p2]
+                    .iter()
+                    .filter_map(|&pkg| {
+                        if locked.keys().any(|k| k.as_str() == pkg.as_str()) {
+                            Some(EcoString::from(pkg))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Only return Some if we found any locked packages
+                if conflicting.is_empty() {
+                    None
+                } else {
+                    Some(conflicting)
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 // If the string would parse to an exact version then return the version
